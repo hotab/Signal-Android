@@ -46,9 +46,11 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import org.thoughtcrime.securesms.attachments.AttachmentId;
 import org.thoughtcrime.securesms.components.MediaView;
 import org.thoughtcrime.securesms.components.viewpager.ExtendedOnPageChangedListener;
 import org.thoughtcrime.securesms.database.Address;
+import org.thoughtcrime.securesms.database.DatabaseFactory;
 import org.thoughtcrime.securesms.database.MediaDatabase.MediaRecord;
 import org.thoughtcrime.securesms.database.loaders.PagingMediaLoader;
 import org.thoughtcrime.securesms.mms.GlideApp;
@@ -251,6 +253,15 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
     }
   }
 
+  private void deleteMedia() {
+    MediaItem mediaItem = getCurrentMediaItem();
+    if (mediaItem != null && mediaItem.attachmentId != null) {
+      DatabaseFactory.getAttachmentDatabase(this).deleteAttachmentAndPossiblyMmsMessage(
+          mediaItem.attachmentId);
+      finish();
+    }
+  }
+
   @Override
   public boolean onPrepareOptionsMenu(Menu menu) {
     super.onPrepareOptionsMenu(menu);
@@ -258,7 +269,11 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
     menu.clear();
     MenuInflater inflater = this.getMenuInflater();
     inflater.inflate(R.menu.media_preview, menu);
-    if (conversationRecipient == null) menu.findItem(R.id.media_preview__overview).setVisible(false);
+
+    if (!isMediaInDb()) {
+      menu.findItem(R.id.media_preview__overview).setVisible(false);
+      menu.findItem(R.id.delete).setVisible(false);
+    }
 
     return true;
   }
@@ -271,10 +286,15 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
       case R.id.media_preview__overview: showOverview(); return true;
       case R.id.media_preview__forward:  forward();      return true;
       case R.id.save:                    saveToDisk();   return true;
+      case R.id.delete:                  deleteMedia();  return true;
       case android.R.id.home:            finish();       return true;
     }
 
     return false;
+  }
+
+  private boolean isMediaInDb() {
+    return conversationRecipient != null;
   }
 
   private @Nullable MediaItem getCurrentMediaItem() {
@@ -402,7 +422,7 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
 
     @Override
     public MediaItem getMediaItemFor(int position) {
-      return new MediaItem(null, uri, mediaType, -1, true);
+      return new MediaItem(null, null, uri, mediaType, -1, true);
     }
 
     @Override
@@ -495,6 +515,7 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
       if (mediaRecord.getAttachment().getDataUri() == null) throw new AssertionError();
 
       return new MediaItem(address != null ? Recipient.from(context, address,true) : null,
+                           mediaRecord.getAttachment().getAttachmentId(),
                            mediaRecord.getAttachment().getDataUri(),
                            mediaRecord.getContentType(),
                            mediaRecord.getDate(),
@@ -514,18 +535,26 @@ public class MediaPreviewActivity extends PassphraseRequiredActionBarActivity im
   }
 
   private static class MediaItem {
-    private final @Nullable Recipient recipient;
-    private final @NonNull Uri        uri;
-    private final @NonNull String     type;
-    private final          long       date;
-    private final          boolean    outgoing;
+    private final @Nullable Recipient    recipient;
+    private final @Nullable AttachmentId attachmentId;
+    private final @NonNull  Uri          uri;
+    private final @NonNull  String       type;
+    private final           long         date;
+    private final           boolean      outgoing;
 
-    private MediaItem(@Nullable Recipient recipient, @NonNull Uri uri, @NonNull String type, long date, boolean outgoing) {
-      this.recipient = recipient;
-      this.uri       = uri;
-      this.type      = type;
-      this.date      = date;
-      this.outgoing  = outgoing;
+    private MediaItem(
+        @Nullable Recipient recipient,
+        @Nullable AttachmentId attachmentId,
+        @NonNull Uri uri,
+        @NonNull String type,
+        long date,
+        boolean outgoing) {
+      this.recipient    = recipient;
+      this.attachmentId = attachmentId;
+      this.uri          = uri;
+      this.type         = type;
+      this.date         = date;
+      this.outgoing     = outgoing;
     }
   }
 

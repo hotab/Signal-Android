@@ -98,7 +98,7 @@ public class MediaDatabase extends Database {
       return new MediaRecord(attachment, address, date, outgoing);
     }
 
-    public Attachment getAttachment() {
+    public DatabaseAttachment getAttachment() {
       return attachment;
     }
 

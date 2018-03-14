@@ -31,6 +31,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
 
+import net.sqlcipher.DatabaseUtils;
 import net.sqlcipher.database.SQLiteDatabase;
 
 import org.thoughtcrime.securesms.attachments.Attachment;
@@ -225,7 +226,7 @@ public class AttachmentDatabase extends Database {
   }
 
   @SuppressWarnings("ResultOfMethodCallIgnored")
-  void deleteAttachmentsForMessage(long mmsId) {
+  public void deleteAttachmentsForMessage(long mmsId) {
     SQLiteDatabase database = databaseHelper.getWritableDatabase();
     Cursor cursor           = null;
 
@@ -234,16 +235,7 @@ public class AttachmentDatabase extends Database {
                               new String[] {mmsId+""}, null, null, null);
 
       while (cursor != null && cursor.moveToNext()) {
-        String data = cursor.getString(0);
-        String thumbnail = cursor.getString(1);
-
-        if (!TextUtils.isEmpty(data)) {
-          new File(data).delete();
-        }
-
-        if (!TextUtils.isEmpty(thumbnail)) {
-          new File(thumbnail).delete();
-        }
+        deleteAttachmentOnDisk(cursor.getString(0), cursor.getString(1));
       }
     } finally {
       if (cursor != null)
@@ -251,6 +243,89 @@ public class AttachmentDatabase extends Database {
     }
 
     database.delete(TABLE_NAME, MMS_ID + " = ?", new String[] {mmsId + ""});
+  }
+
+  /**
+   * Deletes the provided attachment. If this was the only attachment for it's linked MMS message,
+   * then the MMS message will also be deleted.
+   */
+  public void deleteAttachmentAndPossiblyMmsMessage(AttachmentId id) {
+    SQLiteDatabase database = databaseHelper.getWritableDatabase();
+    AttachmentFileInfo attachmentFileInfo;
+
+    database.beginTransaction();
+    try {
+      attachmentFileInfo = getAttachmentFileInfo(database, id);
+      if (attachmentFileInfo == null) {
+        Log.w(TAG, "Tried to delete an attachment, but it didn't exist.");
+        return;
+      }
+
+      boolean attachmentSuccess = database.delete(TABLE_NAME, PART_ID_WHERE, id.toStrings()) > 0;
+      boolean mmsSuccess = deleteMmsIfNoAttachmentsExist(database, attachmentFileInfo.mmsId);
+
+      if (!attachmentSuccess || !mmsSuccess) {
+        return;
+      }
+      deleteAttachmentOnDisk(attachmentFileInfo.data, attachmentFileInfo.thumbnail);
+      database.setTransactionSuccessful();
+    } finally {
+      database.endTransaction();
+    }
+  }
+
+  @Nullable
+  private AttachmentFileInfo getAttachmentFileInfo(
+      @NonNull SQLiteDatabase database,
+      @NonNull AttachmentId id) {
+    Cursor cursor = null;
+    AttachmentFileInfo info = null;
+
+    try {
+      cursor = database.query(
+          TABLE_NAME,
+          new String[] { DATA, THUMBNAIL, MMS_ID },
+          PART_ID_WHERE,
+          id.toStrings(),
+          null,
+          null,
+          null);
+      if (cursor != null && cursor.moveToNext()) {
+        info = new AttachmentFileInfo(
+            cursor.getString(0),
+            cursor.getString(1),
+            cursor.getLong(2));
+      }
+    } finally {
+      if (cursor != null) {
+        cursor.close();
+      }
+    }
+    return info;
+  }
+
+  private boolean deleteMmsIfNoAttachmentsExist(
+      @NonNull SQLiteDatabase database,
+      long mmsId) {
+    Cursor cursor = null;
+    try {
+      cursor = database.query(
+          TABLE_NAME,
+          new String[] { ROW_ID },
+          MMS_ID + " = ?",
+          new String[] { String.valueOf(mmsId) },
+          null,
+          null,
+          null);
+      if (cursor == null || !cursor.moveToNext()) {
+        return DatabaseFactory.getMmsDatabase(context).delete(mmsId);
+      }
+      return true;
+    } finally {
+      if (cursor != null) {
+        cursor.close();
+      }
+    }
   }
 
   @SuppressWarnings("ResultOfMethodCallIgnored")
@@ -263,6 +338,17 @@ public class AttachmentDatabase extends Database {
 
     for (File attachment : attachments) {
       attachment.delete();
+    }
+  }
+
+  @SuppressWarnings("ResultOfMethodCallIgnored")
+  private void deleteAttachmentOnDisk(@Nullable String data, @Nullable String thumbnail) {
+    if (!TextUtils.isEmpty(data)) {
+      new File(data).delete();
+    }
+
+    if (!TextUtils.isEmpty(thumbnail)) {
+      new File(thumbnail).delete();
     }
   }
 
@@ -663,6 +749,18 @@ public class AttachmentDatabase extends Database {
       this.file = file;
       this.length = length;
       this.random = random;
+    }
+  }
+
+  private static class AttachmentFileInfo {
+    private final String data;
+    private final String thumbnail;
+    private final long   mmsId;
+
+    private AttachmentFileInfo(@NonNull String data, @NonNull String thumbnail, long mmsId) {
+      this.data      = data;
+      this.thumbnail = thumbnail;
+      this.mmsId     = mmsId;
     }
   }
 }
